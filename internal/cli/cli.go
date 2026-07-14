@@ -10,10 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"miniscribe/internal/asr"
-	"miniscribe/internal/audio"
-	"miniscribe/internal/diarize"
-	"miniscribe/internal/models"
+	"github.com/Harshidpatel12/miniscribe/internal/asr"
+	"github.com/Harshidpatel12/miniscribe/internal/audio"
+	"github.com/Harshidpatel12/miniscribe/internal/diarize"
+	"github.com/Harshidpatel12/miniscribe/internal/models"
 )
 
 var (

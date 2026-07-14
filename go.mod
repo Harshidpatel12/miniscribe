@@ -1,4 +1,4 @@
-module miniscribe
+module github.com/Harshidpatel12/miniscribe
 
 go 1.22
 

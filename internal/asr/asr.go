@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Harshidpatel12/miniscribe/internal/vad"
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
-	"miniscribe/internal/vad"
 )
 
 const sampleRate = 16000

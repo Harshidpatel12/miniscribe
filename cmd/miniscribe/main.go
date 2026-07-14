@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"miniscribe/internal/cli"
+	"github.com/Harshidpatel12/miniscribe/internal/cli"
 	"os"
 )
 

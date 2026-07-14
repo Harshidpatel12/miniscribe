@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Harshidpatel12/miniscribe/internal/asr"
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
-	"miniscribe/internal/asr"
 )
 
 const sampleRate = 16000
