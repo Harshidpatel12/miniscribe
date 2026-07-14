@@ -1,0 +1,38 @@
+# Binaries and executable files
+bin/
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Audio files (used for local testing)
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+
+# Downloaded model files & archives
+*.onnx
+*.ort
+*.tar.gz
+*.tar.bz2
+*.zip
+
+# Local test directories
+test_wavs/
+models/
+
+# IDE files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

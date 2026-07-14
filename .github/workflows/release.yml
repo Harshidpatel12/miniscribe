@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install dependencies (Linux)
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev
+
+      - name: Fetch Go Modules
+        run: go mod download
+
+      - name: Build Binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        run: |
+          mkdir -p build_output
+          if [ "${{ matrix.goos }}" = "linux" ]; then
+            # Build with RPATH pointing to the executable directory
+            go build -ldflags="-r '\$ORIGIN'" -o build_output/miniscribe cmd/miniscribe/main.go
+            
+            # Locate and copy shared libraries (.so) from Go module cache
+            LIB_DIR=$(find $(go env GOMODCACHE) -name "libsherpa-onnx-c-api.so" | head -n 1 | xargs dirname)
+            cp "${LIB_DIR}"/*.so build_output/
+          elif [ "${{ matrix.goos }}" = "darwin" ]; then
+            # Build with RPATH pointing to the executable directory
+            go build -ldflags="-r '@loader_path'" -o build_output/miniscribe cmd/miniscribe/main.go
+            
+            # Locate and copy shared libraries (.dylib) from Go module cache
+            LIB_DIR=$(find $(go env GOMODCACHE) -name "libsherpa-onnx-c-api.dylib" | head -n 1 | xargs dirname)
+            cp "${LIB_DIR}"/*.dylib build_output/
+          fi
+
+      - name: Create Archive
+        run: |
+          tar -czf miniscribe-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz -C build_output .
+
+      - name: Upload Artifacts to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            miniscribe-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
