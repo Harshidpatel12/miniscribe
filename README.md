@@ -1,5 +1,11 @@
 # miniscribe
 
+[![Release](https://img.shields.io/github/v/release/Harshidpatel12/miniscribe)](https://github.com/Harshidpatel12/miniscribe/releases)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/Harshidpatel12/miniscribe)](https://go.dev)
+[![CI Build](https://github.com/Harshidpatel12/miniscribe/actions/workflows/release.yml/badge.svg)](https://github.com/Harshidpatel12/miniscribe/actions)
+[![License](https://img.shields.io/github/license/Harshidpatel12/miniscribe)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/Harshidpatel12/miniscribe?style=social)](https://github.com/Harshidpatel12/miniscribe/stargazers)
+
 A lightning-fast, CPU-friendly local speech-to-text CLI tool. Transcribe audio files offline with automatic voice activity detection (VAD) and speaker diarization (who spoke when) in seconds—with no external servers, API keys, or internet required.
 
 ---
