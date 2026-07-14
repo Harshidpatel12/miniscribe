@@ -21,8 +21,13 @@ type SegmentResult struct {
 	Text    string  `json:"text"`
 }
 
-// Diarize runs speaker diarization on the audio buffer and transcribes each turn.
-func Diarize(samples []float32, modelDir string, r *asr.Recognizer, threads, numSpeakers int) ([]SegmentResult, error) {
+// Diarizer wraps the OfflineSpeakerDiarization engine.
+type Diarizer struct {
+	impl *sherpa.OfflineSpeakerDiarization
+}
+
+// NewDiarizer initializes the OfflineSpeakerDiarization engine.
+func NewDiarizer(modelDir string, threads, numSpeakers int) (*Diarizer, error) {
 	segModel := filepath.Join(modelDir, "sherpa-onnx-pyannote-segmentation-3-0", "model.onnx")
 	embModel := filepath.Join(modelDir, "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
 
@@ -64,10 +69,25 @@ func Diarize(samples []float32, modelDir string, r *asr.Recognizer, threads, num
 	if sd == nil {
 		return nil, fmt.Errorf("failed to create OfflineSpeakerDiarization engine")
 	}
-	defer sherpa.DeleteOfflineSpeakerDiarization(sd)
 
-	segments := sd.Process(samples)
+	return &Diarizer{impl: sd}, nil
+}
 
+// Close releases the diarizer engine resources.
+func (d *Diarizer) Close() {
+	if d.impl != nil {
+		sherpa.DeleteOfflineSpeakerDiarization(d.impl)
+		d.impl = nil
+	}
+}
+
+// Process detects speaker segments in the audio buffer.
+func (d *Diarizer) Process(samples []float32) []sherpa.OfflineSpeakerDiarizationSegment {
+	return d.impl.Process(samples)
+}
+
+// TranscribeSegments transcribes each speaker segment turn using the provided ASR Recognizer.
+func TranscribeSegments(samples []float32, segments []sherpa.OfflineSpeakerDiarizationSegment, r *asr.Recognizer) ([]SegmentResult, error) {
 	results := make([]SegmentResult, 0, len(segments))
 	for _, seg := range segments {
 		startSample := clamp(int(seg.Start*sampleRate), 0, len(samples))
@@ -89,7 +109,6 @@ func Diarize(samples []float32, modelDir string, r *asr.Recognizer, threads, num
 			})
 		}
 	}
-
 	return results, nil
 }
 

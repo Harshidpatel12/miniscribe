@@ -16,6 +16,7 @@ import (
 	"github.com/Harshidpatel12/miniscribe/internal/audio"
 	"github.com/Harshidpatel12/miniscribe/internal/diarize"
 	"github.com/Harshidpatel12/miniscribe/internal/models"
+	"github.com/Harshidpatel12/miniscribe/internal/vad"
 )
 
 var (
@@ -80,7 +81,7 @@ var TranscribeCmd = &cobra.Command{
 			progress = os.Stderr
 		}
 
-		// Auto-pull ASR model on first use.
+		// Auto-pull models synchronously to ensure disk assets exist before concurrent initialization.
 		installed, err := models.IsInstalled(cacheDir, modelName)
 		if err != nil {
 			return err
@@ -92,7 +93,6 @@ var TranscribeCmd = &cobra.Command{
 			}
 		}
 
-		// Auto-pull Silero VAD on first use (required for long-form chunking).
 		vadModelPath := filepath.Join(cacheDir, "silero_vad.onnx")
 		vadInstalled, err := models.IsInstalled(cacheDir, "silero-vad")
 		if err != nil {
@@ -105,25 +105,7 @@ var TranscribeCmd = &cobra.Command{
 			}
 		}
 
-		// Decode audio to PCM
-		logStatus("Decoding audio file %s...\n", audioPath)
-		samples, err := audio.DecodeToPCM(audioPath)
-		if err != nil {
-			return fmt.Errorf("audio decoding failed: %w", err)
-		}
-		duration := float32(len(samples)) / 16000.0
-		logStatus("Audio duration: %.2fs (%d samples)\n", duration, len(samples))
-
-		// Initialize ASR engine
-		logStatus("Loading model %s (%d threads)...\n", modelName, threads)
-		engine, err := asr.NewRecognizer(cacheDir, modelName, threads)
-		if err != nil {
-			return fmt.Errorf("failed to load ASR engine: %w", err)
-		}
-		defer engine.Close()
-
 		if diarizeFlag {
-			// Auto-pull diarization models on first use.
 			diarizeInstalled, err := models.IsInstalled(cacheDir, "diarization")
 			if err != nil {
 				return err
@@ -134,10 +116,56 @@ var TranscribeCmd = &cobra.Command{
 					return fmt.Errorf("failed to download diarization models: %w", err)
 				}
 			}
+		}
+
+		// Spawn Goroutine 1: Load ASR engine in parallel
+		type ASRResult struct {
+			Engine *asr.Recognizer
+			Err    error
+		}
+		asrChan := make(chan ASRResult, 1)
+		go func() {
+			logStatus("Loading model %s (%d threads)...\n", modelName, threads)
+			engine, err := asr.NewRecognizer(cacheDir, modelName, threads)
+			asrChan <- ASRResult{Engine: engine, Err: err}
+		}()
+
+		// Decode audio to PCM on main thread (takes ~100-300ms)
+		logStatus("Decoding audio file %s...\n", audioPath)
+		samples, err := audio.DecodeToPCM(audioPath)
+		if err != nil {
+			return fmt.Errorf("audio decoding failed: %w", err)
+		}
+		duration := float32(len(samples)) / 16000.0
+		logStatus("Audio duration: %.2fs (%d samples)\n", duration, len(samples))
+
+		// Process speaker diarization or VAD chunking sequentially on the main thread.
+		// Since ASR loading is still running in the background, this will overlap with it
+		// without launching multiple concurrent heavy ONNX loader goroutines at the exact same instant.
+		var turns []diarize.SegmentResult
+		var chunks []vad.Chunk
+
+		if diarizeFlag {
 			logStatus("Running speaker diarization...\n")
-			turns, err := diarize.Diarize(samples, cacheDir, engine, threads, numSpeakers)
+			diarizer, err := diarize.NewDiarizer(cacheDir, threads, numSpeakers)
 			if err != nil {
-				return fmt.Errorf("diarization failed: %w", err)
+				return fmt.Errorf("failed to load diarization engine: %w", err)
+			}
+			segmentTurns := diarizer.Process(samples)
+			diarizer.Close()
+
+			// Wait for ASR engine to finish loading (we need it to transcribe the speaker turns)
+			asrRes := <-asrChan
+			if asrRes.Err != nil {
+				return asrRes.Err
+			}
+			engine := asrRes.Engine
+			defer engine.Close()
+
+			// Run transcription on each speaker turn using the loaded ASR engine
+			turns, err = diarize.TranscribeSegments(samples, segmentTurns, engine)
+			if err != nil {
+				return err
 			}
 
 			if format == "json" {
@@ -164,18 +192,46 @@ var TranscribeCmd = &cobra.Command{
 			return nil
 		}
 
-		// Standard ASR
-		logStatus("Transcribing...\n")
-		var text string
-		// If audio is longer than chunk size, use VAD chunking to prevent OOM
 		if duration > chunkSize {
 			logStatus("Audio duration exceeds chunk size (%.1fs > %.1fs). Using VAD auto-chunking.\n", duration, chunkSize)
-			text, err = engine.TranscribeWithChunking(samples, vadModelPath, chunkSize, overlap)
-		} else {
-			text, err = engine.Transcribe(samples)
+			segments, err := vad.DetectSpeechSegments(vadModelPath, samples, 1)
+			if err != nil {
+				return fmt.Errorf("VAD segmentation failed: %w", err)
+			}
+			chunks = vad.GroupSegments(segments, len(samples), chunkSize, overlap)
 		}
-		if err != nil {
-			return fmt.Errorf("transcription failed: %w", err)
+
+		// Wait for ASR engine to finish loading
+		asrRes := <-asrChan
+		if asrRes.Err != nil {
+			return asrRes.Err
+		}
+		engine := asrRes.Engine
+		defer engine.Close()
+
+		// Standard ASR Path
+		var text string
+		if duration > chunkSize {
+			logStatus("Transcribing chunks...\n")
+			results := make([]string, 0, len(chunks))
+			for _, chunk := range chunks {
+				chunkSamples := samples[chunk.StartSample:chunk.EndSample]
+				chunkText, err := engine.Transcribe(chunkSamples)
+				if err != nil {
+					return fmt.Errorf("failed to transcribe chunk [%.1f-%.1fs]: %w", chunk.StartSec, chunk.EndSec, err)
+				}
+				if chunkText != "" {
+					results = append(results, chunkText)
+				}
+			}
+			text = asr.MergeTranscriptions(results)
+		} else {
+			logStatus("Transcribing...\n")
+			var err error
+			text, err = engine.Transcribe(samples)
+			if err != nil {
+				return fmt.Errorf("transcription failed: %w", err)
+			}
 		}
 
 		if format == "json" {
