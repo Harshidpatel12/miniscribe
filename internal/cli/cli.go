@@ -3,9 +3,11 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -18,14 +20,23 @@ import (
 
 var (
 	modelName   string
-	threads     int
+	threadsStr  string
 	format      string
 	diarizeFlag bool
 	numSpeakers int
 	modelDir    string
 	chunkSize   float32
 	overlap     float32
+	verbose     bool
 )
+
+func logStatus(format string, a ...interface{}) {
+	if !verbose {
+		return
+	}
+	// Print in faint gray to stderr to separate status info from actual stdout output.
+	fmt.Fprintf(os.Stderr, "\033[2m"+format+"\033[0m", a...)
+}
 
 // RootCmd is the base command for the CLI.
 var RootCmd = &cobra.Command{
@@ -48,14 +59,35 @@ var TranscribeCmd = &cobra.Command{
 			return fmt.Errorf("failed to resolve model directory: %w", err)
 		}
 
+		// Parse threads configuration ('all' or an integer)
+		var threads int
+		if threadsStr == "all" {
+			threads = runtime.NumCPU()
+		} else {
+			val, err := strconv.Atoi(threadsStr)
+			if err != nil {
+				return fmt.Errorf("invalid value for --threads: must be an integer or 'all'")
+			}
+			threads = val
+		}
+		if threads < 1 {
+			threads = 1
+		}
+
+		// Redirect model download progress depending on verbosity
+		var progress io.Writer = io.Discard
+		if verbose {
+			progress = os.Stderr
+		}
+
 		// Auto-pull ASR model on first use.
 		installed, err := models.IsInstalled(cacheDir, modelName)
 		if err != nil {
 			return err
 		}
 		if !installed {
-			fmt.Fprintf(os.Stderr, "Model %q not found locally. Downloading...\n", modelName)
-			if err := models.Pull(cacheDir, modelName, os.Stderr); err != nil {
+			logStatus("Model %q not found locally. Downloading...\n", modelName)
+			if err := models.Pull(cacheDir, modelName, progress); err != nil {
 				return fmt.Errorf("failed to download model %q: %w", modelName, err)
 			}
 		}
@@ -67,23 +99,23 @@ var TranscribeCmd = &cobra.Command{
 			return err
 		}
 		if !vadInstalled {
-			fmt.Fprintf(os.Stderr, "Silero VAD not found locally. Downloading...\n")
-			if err := models.Pull(cacheDir, "silero-vad", os.Stderr); err != nil {
+			logStatus("Silero VAD not found locally. Downloading...\n")
+			if err := models.Pull(cacheDir, "silero-vad", progress); err != nil {
 				return fmt.Errorf("failed to download Silero VAD: %w", err)
 			}
 		}
 
 		// Decode audio to PCM
-		fmt.Fprintf(os.Stderr, "Decoding audio file %s...\n", audioPath)
+		logStatus("Decoding audio file %s...\n", audioPath)
 		samples, err := audio.DecodeToPCM(audioPath)
 		if err != nil {
 			return fmt.Errorf("audio decoding failed: %w", err)
 		}
 		duration := float32(len(samples)) / 16000.0
-		fmt.Fprintf(os.Stderr, "Audio duration: %.2fs (%d samples)\n", duration, len(samples))
+		logStatus("Audio duration: %.2fs (%d samples)\n", duration, len(samples))
 
 		// Initialize ASR engine
-		fmt.Fprintf(os.Stderr, "Loading model %s (%d threads)...\n", modelName, threads)
+		logStatus("Loading model %s (%d threads)...\n", modelName, threads)
 		engine, err := asr.NewRecognizer(cacheDir, modelName, threads)
 		if err != nil {
 			return fmt.Errorf("failed to load ASR engine: %w", err)
@@ -97,12 +129,12 @@ var TranscribeCmd = &cobra.Command{
 				return err
 			}
 			if !diarizeInstalled {
-				fmt.Fprintf(os.Stderr, "Diarization models not found locally. Downloading...\n")
-				if err := models.Pull(cacheDir, "diarization", os.Stderr); err != nil {
+				logStatus("Diarization models not found locally. Downloading...\n")
+				if err := models.Pull(cacheDir, "diarization", progress); err != nil {
 					return fmt.Errorf("failed to download diarization models: %w", err)
 				}
 			}
-			fmt.Fprintf(os.Stderr, "Running speaker diarization...\n")
+			logStatus("Running speaker diarization...\n")
 			turns, err := diarize.Diarize(samples, cacheDir, engine, threads, numSpeakers)
 			if err != nil {
 				return fmt.Errorf("diarization failed: %w", err)
@@ -133,11 +165,11 @@ var TranscribeCmd = &cobra.Command{
 		}
 
 		// Standard ASR
-		fmt.Fprintf(os.Stderr, "Transcribing...\n")
+		logStatus("Transcribing...\n")
 		var text string
 		// If audio is longer than chunk size, use VAD chunking to prevent OOM
 		if duration > chunkSize {
-			fmt.Fprintf(os.Stderr, "Audio duration exceeds chunk size (%.1fs > %.1fs). Using VAD auto-chunking.\n", duration, chunkSize)
+			logStatus("Audio duration exceeds chunk size (%.1fs > %.1fs). Using VAD auto-chunking.\n", duration, chunkSize)
 			text, err = engine.TranscribeWithChunking(samples, vadModelPath, chunkSize, overlap)
 		} else {
 			text, err = engine.Transcribe(samples)
@@ -225,13 +257,14 @@ func init() {
 	}
 
 	TranscribeCmd.Flags().StringVarP(&modelName, "model", "m", "moonshine", "Model alias to use (moonshine, whisper, parakeet)")
-	TranscribeCmd.Flags().IntVarP(&threads, "threads", "t", defaultThreads, "Number of CPU threads to use for ONNX inference")
+	TranscribeCmd.Flags().StringVarP(&threadsStr, "threads", "t", strconv.Itoa(defaultThreads), "Number of CPU threads to use ('all' or integer)")
 	TranscribeCmd.Flags().StringVarP(&format, "format", "f", "text", "Output format (text, json)")
 	TranscribeCmd.Flags().BoolVarP(&diarizeFlag, "diarize", "d", false, "Enable speaker diarization (turns + speakers + text)")
 	TranscribeCmd.Flags().IntVarP(&numSpeakers, "num-speakers", "n", -1, "Number of speakers if known in advance (forces auto-clustering if -1)")
 	TranscribeCmd.Flags().StringVarP(&modelDir, "model-dir", "D", "", "Custom path to local models cache (overrides SPEECH_MODEL_DIR)")
 	TranscribeCmd.Flags().Float32VarP(&chunkSize, "chunk-size", "c", 30.0, "Audio chunk duration threshold for VAD in seconds")
 	TranscribeCmd.Flags().Float32VarP(&overlap, "overlap", "o", 2.0, "VAD audio chunk overlap duration in seconds")
+	TranscribeCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Print verbose progress and status logs")
 
 	ModelsCmd.PersistentFlags().StringVarP(&modelDir, "model-dir", "D", "", "Custom path to local models cache (overrides SPEECH_MODEL_DIR)")
 

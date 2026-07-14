@@ -52,22 +52,22 @@ Tailor your transcription using these options:
 | `--format` | `text` | Output format: `text` (plain text/turns) or `json` (metadata segments) | `--format json` |
 | `--diarize` | `false` | Enable speaker identification (requires `diarization` model) | `--diarize` |
 | `--num-speakers` | `-1` (auto) | Set exact number of speakers if known | `--num-speakers 3` |
-| `--threads` | `CPU_CORES - 2` | Limit CPU thread count for neural network computation | `--threads 4` |
+| `--threads` | `CPU_CORES - 2` | CPU thread count limit. Set to `all` to use all cores. | `-t all` |
 | `--model-dir` | `~/.cache/speech/models` | Custom models folder path | `--model-dir ./my-models` |
 | `--chunk-size` | `30.0` | Maximum segment length in seconds before auto-splitting | `--chunk-size 20.0` |
 | `--overlap` | `2.0` | Overlap window between voice chunks | `--overlap 1.5` |
+| `--verbose` / `-v` | `false` | Print progress, downloading, and status log messages | `-v` |
 
 ---
 
 ## 💡 Quick Examples
 
-### 1. Simple Transcription
+### 1. Simple Transcription (Quiet by Default)
 ```bash
 miniscribe transcribe lecture.mp3
 ```
 
 ### 2. Identify Who Spoke When (Diarization)
-Make sure to run `miniscribe models pull diarization` first, then run:
 ```bash
 miniscribe transcribe meeting.wav --diarize
 ```
@@ -77,9 +77,9 @@ miniscribe transcribe meeting.wav --diarize
 miniscribe transcribe podcast.m4a --format json | jq .
 ```
 
-### 4. Optimize CPU Threads for Server Use
+### 4. Use All CPU Cores & Print Progress Logs
 ```bash
-miniscribe transcribe conversation.wav --threads 4 --model whisper
+miniscribe transcribe conversation.wav -t all -v
 ```
 
 ---
