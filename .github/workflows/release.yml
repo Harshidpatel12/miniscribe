@@ -50,9 +50,9 @@ jobs:
         run: |
           mkdir -p build_output
           if [ "${{ matrix.goos }}" = "linux" ]; then
-            # Use ./cmd/miniscribe (package path) so the module resolver activates.
             # RPATH $ORIGIN tells the dynamic linker to search beside the binary.
-            go build -ldflags="-r '\$ORIGIN'" -o build_output/miniscribe ./cmd/miniscribe
+            export CGO_LDFLAGS="-Wl,-rpath,\$ORIGIN"
+            go build -o build_output/miniscribe ./cmd/miniscribe
 
             # Copy bundled sherpa-onnx shared libraries so the archive is self-contained.
             LIB_DIR=$(find "$(go env GOMODCACHE)" -name "libsherpa-onnx-c-api.so" | head -n 1 | xargs dirname)
@@ -60,7 +60,8 @@ jobs:
 
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             # @loader_path is the macOS equivalent of $ORIGIN.
-            go build -ldflags="-r '@loader_path'" -o build_output/miniscribe ./cmd/miniscribe
+            export CGO_LDFLAGS="-Wl,-rpath,@loader_path"
+            go build -o build_output/miniscribe ./cmd/miniscribe
 
             LIB_DIR=$(find "$(go env GOMODCACHE)" -name "libsherpa-onnx-c-api.dylib" | head -n 1 | xargs dirname)
             cp "${LIB_DIR}"/*.dylib build_output/
