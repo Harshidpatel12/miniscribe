@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"miniscribe/internal/cli"
+	"os"
 )
 
 func main() {

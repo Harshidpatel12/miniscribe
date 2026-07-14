@@ -48,23 +48,29 @@ var TranscribeCmd = &cobra.Command{
 			return fmt.Errorf("failed to resolve model directory: %w", err)
 		}
 
-		// Check if chosen ASR model is installed
+		// Auto-pull ASR model on first use.
 		installed, err := models.IsInstalled(cacheDir, modelName)
 		if err != nil {
 			return err
 		}
 		if !installed {
-			return fmt.Errorf("model %q is not installed. To pull it, run:\n  speech models pull %s", modelName, modelName)
+			fmt.Fprintf(os.Stderr, "Model %q not found locally. Downloading...\n", modelName)
+			if err := models.Pull(cacheDir, modelName, os.Stderr); err != nil {
+				return fmt.Errorf("failed to download model %q: %w", modelName, err)
+			}
 		}
 
-		// For long-form audio chunking or diarization, we need Silero VAD. Check if VAD is installed.
+		// Auto-pull Silero VAD on first use (required for long-form chunking).
 		vadModelPath := filepath.Join(cacheDir, "silero_vad.onnx")
 		vadInstalled, err := models.IsInstalled(cacheDir, "silero-vad")
 		if err != nil {
 			return err
 		}
 		if !vadInstalled {
-			return fmt.Errorf("VAD model (silero-vad) is not installed. To pull it, run:\n  speech models pull silero-vad")
+			fmt.Fprintf(os.Stderr, "Silero VAD not found locally. Downloading...\n")
+			if err := models.Pull(cacheDir, "silero-vad", os.Stderr); err != nil {
+				return fmt.Errorf("failed to download Silero VAD: %w", err)
+			}
 		}
 
 		// Decode audio to PCM
@@ -85,7 +91,17 @@ var TranscribeCmd = &cobra.Command{
 		defer engine.Close()
 
 		if diarizeFlag {
-			// Run Speaker Diarization
+			// Auto-pull diarization models on first use.
+			diarizeInstalled, err := models.IsInstalled(cacheDir, "diarization")
+			if err != nil {
+				return err
+			}
+			if !diarizeInstalled {
+				fmt.Fprintf(os.Stderr, "Diarization models not found locally. Downloading...\n")
+				if err := models.Pull(cacheDir, "diarization", os.Stderr); err != nil {
+					return fmt.Errorf("failed to download diarization models: %w", err)
+				}
+			}
 			fmt.Fprintf(os.Stderr, "Running speaker diarization...\n")
 			turns, err := diarize.Diarize(samples, cacheDir, engine, threads, numSpeakers)
 			if err != nil {
@@ -93,17 +109,20 @@ var TranscribeCmd = &cobra.Command{
 			}
 
 			if format == "json" {
-				var fullTexts []string
-				for _, turn := range turns {
-					fullTexts = append(fullTexts, turn.Text)
+				texts := make([]string, len(turns))
+				for i, turn := range turns {
+					texts[i] = turn.Text
 				}
-				outMap := map[string]interface{}{
-					"text":     strings.Join(fullTexts, " "),
-					"segments": turns,
+				out := struct {
+					Segments interface{} `json:"segments"`
+					Text     string      `json:"text"`
+				}{
+					Segments: turns,
+					Text:     strings.Join(texts, " "),
 				}
-				encoder := json.NewEncoder(os.Stdout)
-				encoder.SetIndent("", "  ")
-				return encoder.Encode(outMap)
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(out)
 			}
 
 			// Format text output per speaker turn
@@ -128,12 +147,12 @@ var TranscribeCmd = &cobra.Command{
 		}
 
 		if format == "json" {
-			outMap := map[string]interface{}{
-				"text": text,
-			}
-			encoder := json.NewEncoder(os.Stdout)
-			encoder.SetIndent("", "  ")
-			return encoder.Encode(outMap)
+			out := struct {
+				Text string `json:"text"`
+			}{Text: text}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(out)
 		}
 
 		fmt.Println(text)
@@ -190,26 +209,12 @@ var ModelsPullCmd = &cobra.Command{
 	Long:  "Download models to the local cache directory. Available: moonshine, whisper, parakeet, diarization, silero-vad.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		modelAlias := args[0]
-
 		cacheDir, err := models.GetCacheDir(modelDir)
 		if err != nil {
 			return err
 		}
-
-		validAliases := map[string]bool{
-			"moonshine":   true,
-			"whisper":     true,
-			"parakeet":    true,
-			"diarization": true,
-			"silero-vad":  true,
-		}
-
-		if !validAliases[modelAlias] {
-			return fmt.Errorf("invalid model alias %q. Supported: moonshine, whisper, parakeet, diarization, silero-vad", modelAlias)
-		}
-
-		return models.Pull(cacheDir, modelAlias, os.Stderr)
+		// models.Pull already returns a clear error for unknown aliases.
+		return models.Pull(cacheDir, args[0], os.Stderr)
 	},
 }
 
@@ -219,16 +224,16 @@ func init() {
 		defaultThreads = 1
 	}
 
-	TranscribeCmd.Flags().StringVar(&modelName, "model", "moonshine", "Model alias to use (moonshine, whisper, parakeet)")
-	TranscribeCmd.Flags().IntVar(&threads, "threads", defaultThreads, "Number of CPU threads to use for ONNX inference")
-	TranscribeCmd.Flags().StringVar(&format, "format", "text", "Output format (text, json)")
-	TranscribeCmd.Flags().BoolVar(&diarizeFlag, "diarize", false, "Enable speaker diarization (turns + speakers + text)")
-	TranscribeCmd.Flags().IntVar(&numSpeakers, "num-speakers", -1, "Number of speakers if known in advance (forces auto-clustering if -1)")
-	TranscribeCmd.Flags().StringVar(&modelDir, "model-dir", "", "Custom path to local models cache (overrides SPEECH_MODEL_DIR)")
-	TranscribeCmd.Flags().Float32Var(&chunkSize, "chunk-size", 30.0, "Audio chunk duration threshold for VAD in seconds")
-	TranscribeCmd.Flags().Float32Var(&overlap, "overlap", 2.0, "VAD audio chunk overlap duration in seconds")
+	TranscribeCmd.Flags().StringVarP(&modelName, "model", "m", "moonshine", "Model alias to use (moonshine, whisper, parakeet)")
+	TranscribeCmd.Flags().IntVarP(&threads, "threads", "t", defaultThreads, "Number of CPU threads to use for ONNX inference")
+	TranscribeCmd.Flags().StringVarP(&format, "format", "f", "text", "Output format (text, json)")
+	TranscribeCmd.Flags().BoolVarP(&diarizeFlag, "diarize", "d", false, "Enable speaker diarization (turns + speakers + text)")
+	TranscribeCmd.Flags().IntVarP(&numSpeakers, "num-speakers", "n", -1, "Number of speakers if known in advance (forces auto-clustering if -1)")
+	TranscribeCmd.Flags().StringVarP(&modelDir, "model-dir", "D", "", "Custom path to local models cache (overrides SPEECH_MODEL_DIR)")
+	TranscribeCmd.Flags().Float32VarP(&chunkSize, "chunk-size", "c", 30.0, "Audio chunk duration threshold for VAD in seconds")
+	TranscribeCmd.Flags().Float32VarP(&overlap, "overlap", "o", 2.0, "VAD audio chunk overlap duration in seconds")
 
-	ModelsCmd.PersistentFlags().StringVar(&modelDir, "model-dir", "", "Custom path to local models cache (overrides SPEECH_MODEL_DIR)")
+	ModelsCmd.PersistentFlags().StringVarP(&modelDir, "model-dir", "D", "", "Custom path to local models cache (overrides SPEECH_MODEL_DIR)")
 
 	ModelsCmd.AddCommand(ModelsListCmd, ModelsPullCmd)
 

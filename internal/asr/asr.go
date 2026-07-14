@@ -1,7 +1,9 @@
 package asr
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,39 +12,38 @@ import (
 	"miniscribe/internal/vad"
 )
 
-// Recognizer wraps the OfflineRecognizer.
+const sampleRate = 16000
+
+// Recognizer wraps the sherpa-onnx OfflineRecognizer.
 type Recognizer struct {
 	impl      *sherpa.OfflineRecognizer
 	modelType string
 }
 
-// NewRecognizer initializes the OfflineRecognizer based on the modelType and modelDir.
-func NewRecognizer(modelDir string, modelType string, threads int) (*Recognizer, error) {
+// NewRecognizer initializes the OfflineRecognizer for the given model type.
+func NewRecognizer(modelDir, modelType string, threads int) (*Recognizer, error) {
 	config := sherpa.OfflineRecognizerConfig{
 		FeatConfig: sherpa.FeatureConfig{
-			SampleRate: 16000,
+			SampleRate: sampleRate,
 			FeatureDim: 80,
 		},
 		DecodingMethod: "greedy_search",
 	}
-
 	config.ModelConfig.NumThreads = threads
 	config.ModelConfig.Debug = 0
 	config.ModelConfig.Provider = "cpu"
 
 	switch modelType {
 	case "moonshine":
-		folder := "sherpa-onnx-moonshine-base-en-int8"
-		dir := filepath.Join(modelDir, folder)
-
+		dir := filepath.Join(modelDir, "sherpa-onnx-moonshine-base-en-int8")
 		preprocessor := filepath.Join(dir, "preprocess.onnx")
 		encoder := filepath.Join(dir, "encode.int8.onnx")
 		uncachedDecoder := filepath.Join(dir, "uncached_decode.int8.onnx")
 		cachedDecoder := filepath.Join(dir, "cached_decode.int8.onnx")
 		tokens := filepath.Join(dir, "tokens.txt")
 
-		if !fileExists(preprocessor) || !fileExists(encoder) || !fileExists(uncachedDecoder) || !fileExists(cachedDecoder) || !fileExists(tokens) {
-			return nil, fmt.Errorf("missing Moonshine model assets in %s. Please run: speech models pull moonshine", dir)
+		if err := requireFiles(dir, preprocessor, encoder, uncachedDecoder, cachedDecoder, tokens); err != nil {
+			return nil, fmt.Errorf("%w\nRun: miniscribe models pull moonshine", err)
 		}
 
 		config.ModelConfig.ModelType = "moonshine"
@@ -55,15 +56,13 @@ func NewRecognizer(modelDir string, modelType string, threads int) (*Recognizer,
 		}
 
 	case "whisper":
-		folder := "sherpa-onnx-whisper-small.en"
-		dir := filepath.Join(modelDir, folder)
-
+		dir := filepath.Join(modelDir, "sherpa-onnx-whisper-small.en")
 		encoder := filepath.Join(dir, "small.en-encoder.int8.onnx")
 		decoder := filepath.Join(dir, "small.en-decoder.int8.onnx")
 		tokens := filepath.Join(dir, "small.en-tokens.txt")
 
-		if !fileExists(encoder) || !fileExists(decoder) || !fileExists(tokens) {
-			return nil, fmt.Errorf("missing Whisper model assets in %s. Please run: speech models pull whisper", dir)
+		if err := requireFiles(dir, encoder, decoder, tokens); err != nil {
+			return nil, fmt.Errorf("%w\nRun: miniscribe models pull whisper", err)
 		}
 
 		config.ModelConfig.ModelType = "whisper"
@@ -74,16 +73,14 @@ func NewRecognizer(modelDir string, modelType string, threads int) (*Recognizer,
 		}
 
 	case "parakeet":
-		folder := "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
-		dir := filepath.Join(modelDir, folder)
-
+		dir := filepath.Join(modelDir, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8")
 		encoder := filepath.Join(dir, "encoder.int8.onnx")
 		decoder := filepath.Join(dir, "decoder.int8.onnx")
 		joiner := filepath.Join(dir, "joiner.int8.onnx")
 		tokens := filepath.Join(dir, "tokens.txt")
 
-		if !fileExists(encoder) || !fileExists(decoder) || !fileExists(joiner) || !fileExists(tokens) {
-			return nil, fmt.Errorf("missing Parakeet model assets in %s. Please run: speech models pull parakeet", dir)
+		if err := requireFiles(dir, encoder, decoder, joiner, tokens); err != nil {
+			return nil, fmt.Errorf("%w\nRun: miniscribe models pull parakeet", err)
 		}
 
 		config.ModelConfig.ModelType = "transducer"
@@ -95,7 +92,7 @@ func NewRecognizer(modelDir string, modelType string, threads int) (*Recognizer,
 		}
 
 	default:
-		return nil, fmt.Errorf("unsupported model type: %s (choose moonshine, whisper, or parakeet)", modelType)
+		return nil, fmt.Errorf("unsupported model type %q (choose: moonshine, whisper, parakeet)", modelType)
 	}
 
 	impl := sherpa.NewOfflineRecognizer(&config)
@@ -103,13 +100,10 @@ func NewRecognizer(modelDir string, modelType string, threads int) (*Recognizer,
 		return nil, fmt.Errorf("failed to create OfflineRecognizer")
 	}
 
-	return &Recognizer{
-		impl:      impl,
-		modelType: modelType,
-	}, nil
+	return &Recognizer{impl: impl, modelType: modelType}, nil
 }
 
-// Close releases the recognizer resources.
+// Close releases the underlying recognizer resources.
 func (r *Recognizer) Close() {
 	if r.impl != nil {
 		sherpa.DeleteOfflineRecognizer(r.impl)
@@ -117,7 +111,7 @@ func (r *Recognizer) Close() {
 	}
 }
 
-// Transcribe transcribes a single contiguous audio buffer.
+// Transcribe decodes a contiguous float32 audio buffer to text.
 func (r *Recognizer) Transcribe(samples []float32) (string, error) {
 	if len(samples) == 0 {
 		return "", nil
@@ -129,20 +123,18 @@ func (r *Recognizer) Transcribe(samples []float32) (string, error) {
 	}
 	defer sherpa.DeleteOfflineStream(stream)
 
-	stream.AcceptWaveform(16000, samples)
+	stream.AcceptWaveform(sampleRate, samples)
 	r.impl.Decode(stream)
 
-	res := stream.GetResult()
-	return strings.TrimSpace(res.Text), nil
+	return strings.TrimSpace(stream.GetResult().Text), nil
 }
 
-// TranscribeWithChunking splits long audio using VAD and transcribes chunks in memory.
-func (r *Recognizer) TranscribeWithChunking(samples []float32, vadModelPath string, maxChunkDuration float32, overlap float32) (string, error) {
+// TranscribeWithChunking splits long audio using Silero VAD then stitches the results.
+func (r *Recognizer) TranscribeWithChunking(samples []float32, vadModelPath string, maxChunkDuration, overlap float32) (string, error) {
 	segments, err := vad.DetectSpeechSegments(vadModelPath, samples, 1)
 	if err != nil {
 		return "", fmt.Errorf("VAD segmentation failed: %w", err)
 	}
-
 	if len(segments) == 0 {
 		return "", nil
 	}
@@ -152,12 +144,11 @@ func (r *Recognizer) TranscribeWithChunking(samples []float32, vadModelPath stri
 		return "", nil
 	}
 
-	var results []string
+	results := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
-		chunkSamples := samples[chunk.StartSample:chunk.EndSample]
-		text, err := r.Transcribe(chunkSamples)
+		text, err := r.Transcribe(samples[chunk.StartSample:chunk.EndSample])
 		if err != nil {
-			return "", fmt.Errorf("failed to transcribe chunk: %w", err)
+			return "", fmt.Errorf("failed to transcribe chunk [%.1f-%.1fs]: %w", chunk.StartSec, chunk.EndSec, err)
 		}
 		if text != "" {
 			results = append(results, text)
@@ -167,34 +158,27 @@ func (r *Recognizer) TranscribeWithChunking(samples []float32, vadModelPath stri
 	return MergeTranscriptions(results), nil
 }
 
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return false
-	}
-	return !info.IsDir()
-}
-
-// MergeTranscriptions stitches transcribed text chunks together while removing overlap.
+// MergeTranscriptions joins chunk results, removing word-level overlap at boundaries.
 func MergeTranscriptions(results []string) string {
-	if len(results) == 0 {
+	switch len(results) {
+	case 0:
 		return ""
-	}
-	if len(results) == 1 {
+	case 1:
 		return results[0]
 	}
 
-	cleaned := []string{results[0]}
+	merged := make([]string, 0, len(results))
+	merged = append(merged, results[0])
 	for i := 1; i < len(results); i++ {
-		cleanedChunk := detectAndRemoveOverlap(results[i-1], results[i])
-		if cleanedChunk != "" {
-			cleaned = append(cleaned, cleanedChunk)
+		if deduped := detectAndRemoveOverlap(results[i-1], results[i]); deduped != "" {
+			merged = append(merged, deduped)
 		}
 	}
-
-	return strings.Join(cleaned, " ")
+	return strings.Join(merged, " ")
 }
 
+// detectAndRemoveOverlap removes the prefix of currText that duplicates the
+// suffix of prevText (up to 10 words of look-back).
 func detectAndRemoveOverlap(prevText, currText string) string {
 	prevWords := strings.Fields(prevText)
 	currWords := strings.Fields(currText)
@@ -202,24 +186,10 @@ func detectAndRemoveOverlap(prevText, currText string) string {
 		return currText
 	}
 
-	maxOverlap := len(prevWords)
-	if len(currWords) < maxOverlap {
-		maxOverlap = len(currWords)
-	}
-	if maxOverlap > 10 {
-		maxOverlap = 10
-	}
-
+	maxOverlap := min(len(prevWords), len(currWords), 10)
 	overlapFound := 0
 	for i := 1; i <= maxOverlap; i++ {
-		match := true
-		for j := 0; j < i; j++ {
-			if prevWords[len(prevWords)-i+j] != currWords[j] {
-				match = false
-				break
-			}
-		}
-		if match {
+		if prevWords[len(prevWords)-i:] != nil && wordsMatch(prevWords[len(prevWords)-i:], currWords[:i]) {
 			overlapFound = i
 		}
 	}
@@ -228,4 +198,39 @@ func detectAndRemoveOverlap(prevText, currText string) string {
 		return strings.Join(currWords[overlapFound:], " ")
 	}
 	return currText
+}
+
+func wordsMatch(a, b []string) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// requireFiles returns an error if any of the provided file paths are missing.
+func requireFiles(modelDir string, paths ...string) error {
+	for _, p := range paths {
+		if !isFile(p) {
+			return fmt.Errorf("missing model asset %q in %s", filepath.Base(p), modelDir)
+		}
+	}
+	return nil
+}
+
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return !errors.Is(err, fs.ErrNotExist) && err == nil && !info.IsDir()
+}
+
+func min(a, b, c int) int {
+	m := a
+	if b < m {
+		m = b
+	}
+	if c < m {
+		m = c
+	}
+	return m
 }

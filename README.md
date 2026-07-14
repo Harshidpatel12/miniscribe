@@ -1,106 +1,116 @@
 # miniscribe
 
-A CPU-friendly local speech-to-text CLI wrapping `sherpa-onnx` for automatic speech recognition, Silero VAD chunking, and pyannote speaker diarization.
+A lightning-fast, CPU-friendly local speech-to-text CLI tool. Transcribe audio files offline with automatic voice activity detection (VAD) and speaker diarization (who spoke when) in seconds—with no external servers, API keys, or internet required.
 
-Inspired by [Soniqo](https://soniqo.audio/cli), it delivers offline speech-to-text with no external servers, API keys, or heavy framework dependencies.
+---
 
-## Prerequisites
+## 🚀 Quick Install (Linux & macOS)
 
-- **Go**: 1.22 or higher
-- **FFmpeg**: Required for decoding non-WAV/WAV audio file formats to the expected PCM stream. Verify via `ffmpeg -version`.
-- **CGO**: A C compiler (like `gcc` or `clang`) must be installed on your system.
+Get started instantly using one of the following commands. The installer will automatically configure `miniscribe` and download the necessary dependencies for your system.
 
-## Installation
-
-### Single-Command Installer (Linux & macOS)
-
-To install `miniscribe` and its required prebuilt shared libraries, run using **curl**:
-
+**Using curl:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Harshidpatel12/miniscribe/main/install.sh | bash
 ```
 
-Or using **wget**:
-
+**Using wget:**
 ```bash
 wget -qO- https://raw.githubusercontent.com/Harshidpatel12/miniscribe/main/install.sh | bash
 ```
 
-*Note: This script automatically detects your Operating System and Architecture, downloads the pre-built tarball from GitHub Releases, extracts it, and links the binary to your executable path (`/usr/local/bin` or `~/.local/bin` if running without root).*
+---
 
-## Build
+## 📖 User Guide
 
-Compile the single binary using CGO:
+### Available Commands
 
-```bash
-cd miniscribe
-make build
-```
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `miniscribe transcribe <file>` | Transcribe any audio file to text. Auto-splits long files. | `miniscribe transcribe meeting.wav` |
+| `miniscribe models list` | Show all available and locally installed AI models. | `miniscribe models list` |
+| `miniscribe models pull <alias>` | Download an AI model to your local cache. | `miniscribe models pull moonshine` |
 
-This compiles the executable into `./bin/miniscribe`.
+### Supported Models
+
+Before transcribing, download your desired model using `miniscribe models pull <model-name>`.
+
+| Model Name | Description | Size | Best For |
+| :--- | :--- | :--- | :--- |
+| `moonshine` | Moonshine base English (int8 quantized) | ~54 MB | Fast, accurate, resource-friendly transcription |
+| `whisper` | Whisper small English (int8 quantized) | ~480 MB | High-quality, robust transcription for noisy audio |
+| `parakeet` | NeMo Parakeet TDT 0.6b English (int8 quantized) | ~160 MB | Balanced speed and accuracy |
+| `diarization` | Pyannote Segmentation + 3D-Speaker Embeddings | ~100 MB | Required if you want to use the `--diarize` flag |
+| `silero-vad` | Silero Voice Activity Detector | ~640 KB | Automatically downloaded (required for long-form chunking) |
+
+### Transcription Options (Flags)
+
+Tailor your transcription using these options:
+
+| Flag | Default | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `--model` | `moonshine` | Choose ASR model: `moonshine`, `whisper`, or `parakeet` | `--model whisper` |
+| `--format` | `text` | Output format: `text` (plain text/turns) or `json` (metadata segments) | `--format json` |
+| `--diarize` | `false` | Enable speaker identification (requires `diarization` model) | `--diarize` |
+| `--num-speakers` | `-1` (auto) | Set exact number of speakers if known | `--num-speakers 3` |
+| `--threads` | `CPU_CORES - 2` | Limit CPU thread count for neural network computation | `--threads 4` |
+| `--model-dir` | `~/.cache/speech/models` | Custom models folder path | `--model-dir ./my-models` |
+| `--chunk-size` | `30.0` | Maximum segment length in seconds before auto-splitting | `--chunk-size 20.0` |
+| `--overlap` | `2.0` | Overlap window between voice chunks | `--overlap 1.5` |
 
 ---
 
-## 5 Copy-Paste Examples
+## 💡 Quick Examples
 
-### 1. Download Model Assets
-Pull any of the curated model architectures to your local cache:
+### 1. Simple Transcription
 ```bash
-./bin/miniscribe models pull moonshine
-./bin/miniscribe models pull whisper
-./bin/miniscribe models pull diarization
+miniscribe transcribe lecture.mp3
 ```
 
-### 2. Basic Transcription
-Transcribe any audio file (WAV, MP3, M4A, FLAC, etc.):
+### 2. Identify Who Spoke When (Diarization)
+Make sure to run `miniscribe models pull diarization` first, then run:
 ```bash
-./bin/miniscribe transcribe conversation.mp3
+miniscribe transcribe meeting.wav --diarize
 ```
 
-### 3. CPU Thread Management
-Limit or tune CPU core utilization for server friendliness:
+### 3. Output to JSON for Post-Processing
 ```bash
-./bin/miniscribe transcribe lecture.wav --model whisper --threads 4
+miniscribe transcribe podcast.m4a --format json | jq .
 ```
 
-### 4. Speaker Diarization (Who Spoke When)
-Diarize speaker turns, timestamp their entries, and transcribe segments:
+### 4. Optimize CPU Threads for Server Use
 ```bash
-./bin/miniscribe transcribe meeting.wav --diarize
-```
-*If you know the speaker count in advance, force auto-clustering:*
-```bash
-./bin/miniscribe transcribe meeting.wav --diarize --num-speakers 3
-```
-
-### 5. Pipe-Friendly JSON Outputs
-Output structured data for post-processing pipelines:
-```bash
-./bin/miniscribe transcribe interview.m4a --format json | jq .
+miniscribe transcribe conversation.wav --threads 4 --model whisper
 ```
 
 ---
 
-## CLI Catalog & Options
+## 🛠️ Developer Guide
 
-```
-miniscribe transcribe <audio-file> [flags]
+If you want to build `miniscribe` from source or contribute to the project:
 
-Flags:
-  --model string        Model alias (moonshine, whisper, parakeet) (default "moonshine")
-  --threads int         Number of CPU threads to use (default CPU_CORES - 2)
-  --format string       Output format (text, json) (default "text")
-  --diarize             Enable pyannote-based speaker diarization
-  --num-speakers int    Pre-defined cluster count for diarization (default -1)
-  --model-dir string    Custom models folder path (overrides SPEECH_MODEL_DIR env)
-  --chunk-size float    VAD auto-chunking duration limit in seconds (default 30.0)
-  --overlap float       Overlap window between VAD chunks in seconds (default 2.0)
-```
+### Prerequisites
+- **Go**: Version 1.22 or higher
+- **FFmpeg**: Installed and in your system PATH (required for audio decoding)
+- **CGO**: A C compiler (like `gcc` or `clang`) must be installed on your system
 
-To list local and available models:
-```bash
-./bin/miniscribe models list
-```
+### Build from Source
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Harshidpatel12/miniscribe.git
+   cd miniscribe
+   ```
+2. Build the executable:
+   ```bash
+   make build
+   ```
+   This compiles a portable binary containing custom relative RPATHs linking to the required CGO dependencies into `./bin/miniscribe`.
 
-## Model Cache Directory
-By default, models are downloaded to `~/.cache/speech/models`. You can override this using the `SPEECH_MODEL_DIR` environment variable, or passing `--model-dir` at runtime.
+3. Run the unit tests (which also automatically formats code):
+   ```bash
+   make test
+   ```
+
+4. Format the source code manually:
+   ```bash
+   make fmt
+   ```

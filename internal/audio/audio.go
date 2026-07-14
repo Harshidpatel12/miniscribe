@@ -2,22 +2,19 @@ package audio
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
-	"math"
 	"os/exec"
+	"unsafe"
 )
 
-// DecodeToPCM decodes any input audio file to 16kHz mono float32 PCM samples using ffmpeg.
-// Samples are in the range [-1.0, 1.0].
+// DecodeToPCM decodes any input audio file to 16kHz mono float32 PCM samples
+// using ffmpeg. Samples are in the range [-1.0, 1.0].
 func DecodeToPCM(inputPath string) ([]float32, error) {
-	// Check if ffmpeg is in PATH
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return nil, fmt.Errorf("ffmpeg not found in PATH. Please install ffmpeg: %w", err)
+		return nil, fmt.Errorf("ffmpeg not found in PATH: %w", err)
 	}
 
-	// Extract raw float32 little-endian PCM
 	cmd := exec.Command("ffmpeg",
 		"-y",
 		"-i", inputPath,
@@ -39,26 +36,27 @@ func DecodeToPCM(inputPath string) ([]float32, error) {
 		return nil, fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// Read all stdout bytes
 	data, err := io.ReadAll(stdout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read ffmpeg stdout: %w", err)
 	}
 
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("ffmpeg process failed: %w, stderr: %s", err, stderr.String())
+		return nil, fmt.Errorf("ffmpeg failed: %w\nstderr: %s", err, stderr.String())
 	}
 
 	if len(data)%4 != 0 {
-		return nil, fmt.Errorf("decoded PCM data length is not a multiple of 4 bytes: got %d", len(data))
+		return nil, fmt.Errorf("decoded PCM byte length %d is not a multiple of 4", len(data))
 	}
 
+	// Reinterpret the raw []byte as []float32 without copying.
+	// f32le output from ffmpeg is native float32 little-endian which is the
+	// same representation as Go's float32 on all supported platforms (x86, ARM).
 	numSamples := len(data) / 4
-	samples := make([]float32, numSamples)
-	for i := 0; i < numSamples; i++ {
-		bits := binary.LittleEndian.Uint32(data[i*4 : (i+1)*4])
-		samples[i] = math.Float32frombits(bits)
-	}
+	samples := unsafe.Slice((*float32)(unsafe.Pointer(&data[0])), numSamples)
 
-	return samples, nil
+	// Copy into a new slice so the GC can free the original []byte backing array.
+	out := make([]float32, numSamples)
+	copy(out, samples)
+	return out, nil
 }
