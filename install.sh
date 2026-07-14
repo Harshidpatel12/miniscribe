@@ -11,8 +11,8 @@ elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     ARCH="arm64"
 fi
 
-# Define the repository (update this to your GitHub username when publishing)
-REPO="YOUR_GITHUB_USERNAME/miniscribe"
+# Define the repository
+REPO="Harshidpatel12/miniscribe"
 
 # Get latest release from GitHub API
 echo "Fetching latest version from GitHub..."

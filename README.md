@@ -14,10 +14,16 @@ Inspired by [Soniqo](https://soniqo.audio/cli), it delivers offline speech-to-te
 
 ### Single-Command Installer (Linux & macOS)
 
-To install `miniscribe` and its required prebuilt shared libraries, run:
+To install `miniscribe` and its required prebuilt shared libraries, run using **curl**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/miniscribe/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Harshidpatel12/miniscribe/main/install.sh | bash
+```
+
+Or using **wget**:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/Harshidpatel12/miniscribe/main/install.sh | bash
 ```
 
 *Note: This script automatically detects your Operating System and Architecture, downloads the pre-built tarball from GitHub Releases, extracts it, and links the binary to your executable path (`/usr/local/bin` or `~/.local/bin` if running without root).*
