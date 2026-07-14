@@ -13,15 +13,16 @@ jobs:
     name: Build & Release
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
-          - os: macos-latest
+          - os: macos-13        # intel runner — native amd64
             goos: darwin
             goarch: amd64
-          - os: macos-latest
+          - os: macos-latest    # M-series runner — native arm64
             goos: darwin
             goarch: arm64
 
@@ -45,24 +46,23 @@ jobs:
 
       - name: Build Binary
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
         run: |
           mkdir -p build_output
           if [ "${{ matrix.goos }}" = "linux" ]; then
-            # Build with RPATH pointing to the executable directory
-            go build -ldflags="-r '\$ORIGIN'" -o build_output/miniscribe cmd/miniscribe/main.go
-            
-            # Locate and copy shared libraries (.so) from Go module cache
-            LIB_DIR=$(find $(go env GOMODCACHE) -name "libsherpa-onnx-c-api.so" | head -n 1 | xargs dirname)
+            # Use ./cmd/miniscribe (package path) so the module resolver activates.
+            # RPATH $ORIGIN tells the dynamic linker to search beside the binary.
+            go build -ldflags="-r '\$ORIGIN'" -o build_output/miniscribe ./cmd/miniscribe
+
+            # Copy bundled sherpa-onnx shared libraries so the archive is self-contained.
+            LIB_DIR=$(find "$(go env GOMODCACHE)" -name "libsherpa-onnx-c-api.so" | head -n 1 | xargs dirname)
             cp "${LIB_DIR}"/*.so build_output/
+
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
-            # Build with RPATH pointing to the executable directory
-            go build -ldflags="-r '@loader_path'" -o build_output/miniscribe cmd/miniscribe/main.go
-            
-            # Locate and copy shared libraries (.dylib) from Go module cache
-            LIB_DIR=$(find $(go env GOMODCACHE) -name "libsherpa-onnx-c-api.dylib" | head -n 1 | xargs dirname)
+            # @loader_path is the macOS equivalent of $ORIGIN.
+            go build -ldflags="-r '@loader_path'" -o build_output/miniscribe ./cmd/miniscribe
+
+            LIB_DIR=$(find "$(go env GOMODCACHE)" -name "libsherpa-onnx-c-api.dylib" | head -n 1 | xargs dirname)
             cp "${LIB_DIR}"/*.dylib build_output/
           fi
 

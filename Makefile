@@ -2,7 +2,7 @@
 
 build:
 	mkdir -p bin
-	go build -o bin/miniscribe cmd/miniscribe/main.go
+	go build -o bin/miniscribe ./cmd/miniscribe
 
 fmt:
 	go fmt ./...
